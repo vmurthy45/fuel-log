@@ -7,7 +7,7 @@ const LS_THEME = "fuellog.theme";
 /* ---------------- state & storage ---------------- */
 let entries = [];          // {id,date,station,odometer,fuelType,price,litres,partial}
 let editingId = null;
-let rangeMonths = null;    // null = all
+let rangeSel = { kind: "all" };   // {kind:"all"} | {kind:"months",n} | {kind:"year",y}
 let currentTab = "add";
 
 function load() {
@@ -55,15 +55,14 @@ function derived() {
   return list;
 }
 
-function rangeCutoff() {
-  if (rangeMonths == null) return null;
-  const d = new Date();
-  d.setMonth(d.getMonth() - rangeMonths);
-  return d.toISOString().slice(0, 10);
-}
 function inRange(e) {
-  const c = rangeCutoff();
-  return !c || e.date >= c;
+  if (rangeSel.kind === "months") {
+    const d = new Date();
+    d.setMonth(d.getMonth() - rangeSel.n);
+    return e.date >= d.toISOString().slice(0, 10);
+  }
+  if (rangeSel.kind === "year") return e.date.slice(0, 4) === rangeSel.y;
+  return true;
 }
 
 /* ---------------- formatting ---------------- */
@@ -257,8 +256,10 @@ function renderHistory() {
   box.textContent = "";
   const fuel = list.filter((e) => !isBaseline(e));
   const totalSpend = fuel.reduce((s, e) => s + e.cost, 0);
+  const odos = list.map((e) => e.odometer);
+  const tracked = odos.length > 1 ? Math.max(...odos) - Math.min(...odos) : 0;
   $("#historySummary").textContent = fuel.length
-    ? `${fuel.length} fills · ${fmtInt(maxOdo())} km · ${fmtMoney(totalSpend, 0)} total`
+    ? `${fuel.length} fills · ${fmtInt(tracked)} km tracked · ${fmtMoney(totalSpend, 0)} total`
     : "";
   if (!list.length) {
     box.appendChild(el("div", "empty", "No fills yet — add your first one."));
@@ -297,9 +298,32 @@ function renderHistory() {
 }
 
 /* ---------------- dashboard ---------------- */
+function dataYears() {
+  const ys = new Set(entries.filter((e) => !isBaseline(e)).map((e) => e.date.slice(0, 4)));
+  return [...ys].sort().reverse();
+}
+function renderRangeChips() {
+  const box = $("#rangeChips");
+  box.textContent = "";
+  const defs = [
+    ["All", { kind: "all" }],
+    ["3 mo", { kind: "months", n: 3 }],
+    ["6 mo", { kind: "months", n: 6 }],
+    ["12 mo", { kind: "months", n: 12 }],
+    ...dataYears().map((y) => [y, { kind: "year", y }]),
+  ];
+  for (const [label, sel] of defs) {
+    const btn = el("button", null, label);
+    if (sel.kind === rangeSel.kind && sel.n === rangeSel.n && sel.y === rangeSel.y) btn.classList.add("on");
+    btn.addEventListener("click", () => { rangeSel = sel; renderDash(); });
+    box.appendChild(btn);
+  }
+}
+
 function renderDash() {
   const all = derived();
   const fuel = all.filter((e) => !isBaseline(e) && inRange(e));
+  renderRangeChips();
   renderTiles(fuel);
   renderEconChart(all);
   renderPriceChart(fuel);
@@ -319,10 +343,13 @@ function renderTiles(fuel) {
   const aggLit = ivals.reduce((s, e) => s + e.intervalLitres, 0);
   const avgEcon = aggDist ? (aggLit / aggDist) * 100 : 0;
   const costKm = avgEcon && avgPrice ? (avgEcon / 100) * avgPrice : 0;
+  const dist = fuel.reduce((s, e) => s + (e.dist || 0), 0);
   const tiles = [
+    ["Distance driven", dist ? fmtInt(dist) : "–", "km", fuel.length + (fuel.length === 1 ? " fill" : " fills")],
+    ["Fuel used", litres ? fmtInt(Math.round(litres)) : "–", "L", fuel.length ? "avg " + (litres / fuel.length).toFixed(1) + " L per fill" : ""],
+    ["Total spend", spend ? fmtMoney(spend, spend >= 1000 ? 0 : 2) : "–", "", fuel.length ? "avg " + fmtMoney(spend / fuel.length) + " per fill" : ""],
     ["Avg economy", avgEcon ? avgEcon.toFixed(2) : "–", "L/100km", ivals.length + " tanks"],
     ["Avg price paid", avgPrice ? fmtMoney(avgPrice) : "–", "/L", "litre-weighted"],
-    ["Total spend", spend ? fmtMoney(spend, spend >= 1000 ? 0 : 2) : "–", "", fuel.length + " fills · " + Math.round(litres) + " L"],
     ["Running cost", costKm ? (costKm * 100).toFixed(1) + "¢" : "–", "/km", "economy × price"],
   ];
   for (const [label, value, unit, note] of tiles) {
@@ -848,13 +875,6 @@ function init() {
       switchTab("history");
     }
   });
-
-  document.querySelectorAll("#rangeChips button").forEach((b) =>
-    b.addEventListener("click", () => {
-      document.querySelectorAll("#rangeChips button").forEach((x) => x.classList.toggle("on", x === b));
-      rangeMonths = b.dataset.r === "all" ? null : +b.dataset.r;
-      renderDash();
-    }));
 
   $("#themeBtn").addEventListener("click", cycleTheme);
   $("#exportBtn").addEventListener("click", exportCSV);

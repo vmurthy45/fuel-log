@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fuel Log</title>
+<meta name="description" content="Personal fuel usage tracker — log fills, see economy and spend insights.">
+<meta name="theme-color" content="#2a78d6">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Fuel Log">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <h1><span class="logo" aria-hidden="true"></span>Fuel Log</h1>
+    <button id="themeBtn" class="icon-btn" title="Theme" aria-label="Toggle theme">◐</button>
+  </header>
+
+  <main id="main">
+
+    <!-- ADD / EDIT -->
+    <section id="tab-add" class="tab" hidden>
+      <h2 id="addTitle">Add fill</h2>
+      <form id="fillForm" autocomplete="off">
+        <div class="field">
+          <label for="fDate">Date</label>
+          <input type="date" id="fDate" required>
+        </div>
+        <div class="field">
+          <label for="fStation">Station</label>
+          <input type="text" id="fStation" list="stationList" placeholder="e.g. Costco" enterkeyhint="next">
+          <datalist id="stationList"></datalist>
+          <div class="chips" id="stationChips"></div>
+        </div>
+        <div class="field">
+          <label for="fOdo">Odometer (km)</label>
+          <input type="number" id="fOdo" inputmode="numeric" min="0" step="1" required placeholder="">
+          <div class="hint" id="odoHint"></div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="fLitres">Litres</label>
+            <input type="number" id="fLitres" inputmode="decimal" min="0" step="0.001" required placeholder="0.00">
+          </div>
+          <div class="field">
+            <label for="fPrice">Price / litre ($)</label>
+            <input type="number" id="fPrice" inputmode="decimal" min="0" step="0.001" required placeholder="0.00">
+          </div>
+        </div>
+        <div class="field">
+          <label id="ftLabel">Petrol type</label>
+          <div class="seg" role="radiogroup" aria-labelledby="ftLabel" id="fuelSeg">
+            <button type="button" data-v="91" role="radio">91</button>
+            <button type="button" data-v="95" role="radio">95</button>
+            <button type="button" data-v="98" role="radio">98</button>
+            <button type="button" data-v="Diesel" role="radio">Diesel</button>
+          </div>
+        </div>
+        <label class="switch-row">
+          <span>Partial fill <small>(didn't fill to full)</small></span>
+          <input type="checkbox" id="fPartial" class="switch">
+        </label>
+        <div class="live-calc" id="liveCalc" hidden></div>
+        <div class="form-actions">
+          <button type="submit" class="btn primary" id="saveBtn">Save fill</button>
+          <button type="button" class="btn" id="cancelEditBtn" hidden>Cancel</button>
+          <button type="button" class="btn danger" id="deleteBtn" hidden>Delete</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="tab-history" class="tab" hidden>
+      <h2>History</h2>
+      <div class="hint" id="historySummary"></div>
+      <div id="historyList"></div>
+    </section>
+
+    <!-- DASHBOARD -->
+    <section id="tab-dash" class="tab" hidden>
+      <div class="filters" id="rangeChips" role="tablist" aria-label="Time range">
+        <button data-r="all" class="on">All</button>
+        <button data-r="12">12 mo</button>
+        <button data-r="6">6 mo</button>
+        <button data-r="3">3 mo</button>
+      </div>
+      <div class="tiles" id="tiles"></div>
+      <div class="card chart-card">
+        <h3>Fuel economy <span class="sub">L / 100 km between full fills — lower is better</span></h3>
+        <div class="chart" id="chartEcon"></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Petrol price <span class="sub">$ per litre paid at each fill</span></h3>
+        <div class="chart" id="chartPrice"></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Monthly spend <span class="sub">$ per calendar month</span></h3>
+        <div class="chart" id="chartSpend"></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Average price by station <span class="sub">$ per litre · number of visits</span></h3>
+        <div class="chart" id="chartStations"></div>
+      </div>
+      <div class="card" id="insightsCard">
+        <h3>Insights</h3>
+        <ul class="insights" id="insightsList"></ul>
+      </div>
+    </section>
+
+    <!-- DATA -->
+    <section id="tab-data" class="tab" hidden>
+      <h2>Data</h2>
+      <div class="card">
+        <h3>Backup &amp; export</h3>
+        <p class="hint" id="dataSummary"></p>
+        <div class="stack">
+          <button class="btn primary" id="exportBtn">Download CSV</button>
+          <button class="btn" id="shareBtn" hidden>Share CSV (save to OneDrive)</button>
+        </div>
+        <p class="hint">Tip: on your phone, <em>Share CSV</em> lets you save straight into OneDrive. Your data lives on this device — export now and then so a lost phone never means lost history.</p>
+      </div>
+      <div class="card">
+        <h3>Import</h3>
+        <p class="hint">Restore from a CSV exported by this app (replaces current data).</p>
+        <input type="file" id="importFile" accept=".csv,text/csv" hidden>
+        <button class="btn" id="importBtn">Import CSV…</button>
+      </div>
+      <div class="card">
+        <h3>Danger zone</h3>
+        <div class="stack">
+          <button class="btn danger" id="wipeBtn">Erase all data</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button data-tab="add" class="on"><span class="ic">＋</span>Add</button>
+    <button data-tab="history"><span class="ic">≡</span>History</button>
+    <button data-tab="dash"><span class="ic">◔</span>Dashboard</button>
+    <button data-tab="data"><span class="ic">⇅</span>Data</button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

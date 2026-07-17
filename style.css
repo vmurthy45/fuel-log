@@ -139,6 +139,16 @@ input[type="date"], input[type="text"], input[type="number"] {
   border-radius: 11px; padding: 12px 13px; min-height: 48px;
 }
 input:focus { outline: 2px solid var(--series-1); outline-offset: -1px; }
+/* iOS Safari gives date inputs an intrinsic width that overflows the viewport —
+   stripping the native appearance makes them respect width:100%. */
+input[type="date"] {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+}
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .hint { font-size: 12.5px; color: var(--muted); margin-top: 5px; line-height: 1.45; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }

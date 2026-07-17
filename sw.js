@@ -1,5 +1,5 @@
 /* Fuel Log service worker — precache the app shell so it opens with zero signal. */
-const CACHE = "fuellog-v3";
+const CACHE = "fuellog-v4";
 const ASSETS = [
   "./",
   "./index.html",

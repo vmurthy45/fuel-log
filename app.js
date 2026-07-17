@@ -5,20 +5,31 @@ const LS_DATA = "fuellog.v1";
 const LS_THEME = "fuellog.theme";
 
 /* ---------------- state & storage ---------------- */
-let entries = [];          // {id,date,station,odometer,fuelType,price,litres,partial}
+let entries = [];          // fuel: {id,date,station,odometer,fuelType,price,litres,partial}
+let admin = [];            // admin: {id,date,category,cost,odometer?,nextDue?,notes?}
 let editingId = null;
+let adminEditingId = null;
 let rangeSel = { kind: "all" };   // {kind:"all"} | {kind:"months",n} | {kind:"year",y}
 let currentTab = "add";
+
+const ADMIN_CATS = ["WOF", "Rego", "Insurance", "Service", "Tyres", "Other"];
+const DUE_SOON_DAYS = 45;
 
 function load() {
   try {
     const raw = localStorage.getItem(LS_DATA);
-    if (raw) { entries = JSON.parse(raw).entries || []; return; }
+    if (raw) {
+      const d = JSON.parse(raw);
+      entries = d.entries || [];
+      admin = d.admin || [];
+      return;
+    }
   } catch (e) { /* corrupted store — start fresh */ }
   entries = [];
+  admin = [];
 }
 function save() {
-  localStorage.setItem(LS_DATA, JSON.stringify({ v: 1, entries }));
+  localStorage.setItem(LS_DATA, JSON.stringify({ v: 1, entries, admin }));
 }
 function uid() {
   return (crypto.randomUUID ? crypto.randomUUID() : "id-" + Date.now() + "-" + Math.random().toString(36).slice(2));
@@ -105,6 +116,7 @@ function switchTab(name) {
   if (name === "dash") renderDash();
   if (name === "data") renderData();
   if (name === "add" && !editingId) prepAddForm();
+  if (name === "admin") renderAdmin();
   window.scrollTo(0, 0);
 }
 
@@ -297,6 +309,148 @@ function renderHistory() {
   }
 }
 
+/* ---------------- admin (WOF / rego / insurance / services / tyres) ---------------- */
+function setAdminCat(v) {
+  document.querySelectorAll("#aCat button").forEach((b) =>
+    b.setAttribute("aria-checked", b.dataset.v === v ? "true" : "false"));
+}
+function getAdminCat() {
+  const b = document.querySelector('#aCat button[aria-checked="true"]');
+  return b ? b.dataset.v : "Other";
+}
+
+function prepAdminForm() {
+  adminEditingId = null;
+  $("#adminFormTitle").textContent = "Add record";
+  $("#aSaveBtn").textContent = "Save record";
+  $("#aCancelBtn").hidden = true;
+  $("#aDeleteBtn").hidden = true;
+  $("#adminForm").reset();
+  const now = new Date();
+  $("#aDate").value = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  setAdminCat("WOF");
+}
+
+function onSubmitAdmin(ev) {
+  ev.preventDefault();
+  const rec = {
+    id: adminEditingId || uid(),
+    date: $("#aDate").value,
+    category: getAdminCat(),
+    cost: parseFloat($("#aCost").value),
+    odometer: $("#aOdo").value !== "" ? Math.round(parseFloat($("#aOdo").value)) : null,
+    nextDue: $("#aDue").value || null,
+    notes: $("#aNotes").value.trim() || null,
+  };
+  if (!rec.date || !(rec.cost >= 0)) { toast("Please fill in date and cost"); return; }
+  if (adminEditingId) {
+    admin = admin.map((r) => (r.id === adminEditingId ? rec : r));
+    toast("Record updated");
+  } else {
+    admin.push(rec);
+    toast(`Saved — ${rec.category} ${fmtMoney(rec.cost)}`);
+  }
+  save();
+  adminEditingId = null;
+  renderAdmin();
+  updateAdminBadge();
+}
+
+function startAdminEdit(id) {
+  const r = admin.find((x) => x.id === id);
+  if (!r) return;
+  adminEditingId = id;
+  $("#adminFormTitle").textContent = "Edit record";
+  $("#aSaveBtn").textContent = "Save changes";
+  $("#aCancelBtn").hidden = false;
+  $("#aDeleteBtn").hidden = false;
+  $("#aDate").value = r.date;
+  setAdminCat(r.category);
+  $("#aCost").value = r.cost;
+  $("#aOdo").value = r.odometer ?? "";
+  $("#aDue").value = r.nextDue || "";
+  $("#aNotes").value = r.notes || "";
+  $("#adminForm").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// Latest record per category that carries a nextDue → active reminder.
+function activeDues() {
+  const latest = {};
+  for (const r of admin) {
+    if (!latest[r.category] || r.date > latest[r.category].date) latest[r.category] = r;
+  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Object.values(latest)
+    .filter((r) => r.nextDue)
+    .map((r) => ({ ...r, days: Math.round((Date.parse(r.nextDue) - today.getTime()) / 86400000) }))
+    .sort((a, b) => a.days - b.days);
+}
+function humanizeDue(days) {
+  const chunk = (n, u) => n + " " + u + (n === 1 ? "" : "s");
+  if (days < 0) return "overdue by " + chunk(-days, "day");
+  if (days === 0) return "due today";
+  if (days < 15) return "due in " + chunk(days, "day");
+  if (days < 70) return "due in " + chunk(Math.round(days / 7), "week");
+  return "due in " + chunk(Math.round(days / 30.44), "month");
+}
+function updateAdminBadge() {
+  const urgent = activeDues().some((d) => d.days <= DUE_SOON_DAYS);
+  const btn = document.querySelector('.tabbar button[data-tab="admin"]');
+  if (btn) btn.classList.toggle("alert", urgent);
+}
+
+function renderAdmin() {
+  if (!adminEditingId) prepAdminForm();
+
+  // reminders
+  const dueBox = $("#dueList");
+  dueBox.textContent = "";
+  const dues = activeDues();
+  if (dues.length) {
+    const card = el("div", "card due-card");
+    card.appendChild(el("h3", null, "Coming up"));
+    for (const d of dues) {
+      const row = el("div", "due-row" + (d.days < 0 ? " overdue" : d.days <= DUE_SOON_DAYS ? " soon" : ""));
+      const left = el("div");
+      left.appendChild(el("strong", null, d.category));
+      left.append(" " + humanizeDue(d.days));
+      row.appendChild(left);
+      row.appendChild(el("span", "due-date", fmtNZDate(d.nextDue)));
+      card.appendChild(row);
+    }
+    dueBox.appendChild(card);
+  }
+
+  // record list
+  const box = $("#adminList");
+  box.textContent = "";
+  if (!admin.length) {
+    box.appendChild(el("div", "empty", "No admin records yet — WOF, rego, insurance, services and tyres all live here."));
+    return;
+  }
+  const list = [...admin].sort((a, b) => b.date.localeCompare(a.date));
+  let year = "";
+  for (const r of list) {
+    const y = r.date.slice(0, 4);
+    if (y !== year) { year = y; box.appendChild(el("div", "month-head", y)); }
+    const row = el("button", "fill-row");
+    row.type = "button";
+    const left = el("div");
+    const l1 = el("div", "l1", r.category);
+    if (r.notes) l1.appendChild(el("span", "badge", r.notes.length > 22 ? r.notes.slice(0, 21) + "…" : r.notes));
+    const bits = [fmtNZDate(r.date)];
+    if (r.odometer != null) bits.push(fmtInt(r.odometer) + " km");
+    if (r.nextDue) bits.push("next: " + fmtNZDate(r.nextDue));
+    left.append(l1, el("div", "l2", bits.join(" · ")));
+    const right = el("div", "r");
+    right.appendChild(el("div", "cost", fmtMoney(r.cost)));
+    row.append(left, right);
+    row.addEventListener("click", () => startAdminEdit(r.id));
+    box.appendChild(row);
+  }
+}
+
 /* ---------------- dashboard ---------------- */
 function dataYears() {
   const ys = new Set(entries.filter((e) => !isBaseline(e)).map((e) => e.date.slice(0, 4)));
@@ -323,13 +477,51 @@ function renderRangeChips() {
 function renderDash() {
   const all = derived();
   const fuel = all.filter((e) => !isBaseline(e) && inRange(e));
+  const adm = admin.filter(inRange);
   renderRangeChips();
   renderTiles(fuel);
   renderEconChart(all);
   renderPriceChart(fuel);
   renderSpendChart(fuel);
   renderStationChart(fuel);
+  renderTCO(fuel, adm);
   renderInsights(all, fuel);
+}
+
+function renderTCO(fuel, adm) {
+  const box = $("#tcoBody");
+  box.textContent = "";
+  const fuelSpend = fuel.reduce((s, e) => s + e.cost, 0);
+  const admSpend = adm.reduce((s, r) => s + r.cost, 0);
+  const total = fuelSpend + admSpend;
+  if (!total) {
+    box.appendChild(el("div", "empty", "No costs in this range. Fuel fills and Admin records both feed this number."));
+    return;
+  }
+  const hero = el("div", "tco-total", fmtMoney(total, total >= 1000 ? 0 : 2));
+  box.appendChild(hero);
+
+  const dist = fuel.reduce((s, e) => s + (e.dist || 0), 0);
+  const sub = el("div", "tco-sub");
+  sub.textContent = dist
+    ? `all-in ${((total / dist) * 100).toFixed(1)}¢ per km over ${fmtInt(dist)} km`
+    : "add fuel fills in this range for a per-km figure";
+  box.appendChild(sub);
+
+  const rows = [];
+  if (fuelSpend > 0) rows.push(["Fuel", fuelSpend]);
+  for (const c of ADMIN_CATS) {
+    const v = adm.filter((r) => r.category === c).reduce((s, r) => s + r.cost, 0);
+    if (v > 0) rows.push([c, v]);
+  }
+  for (const [label, v] of rows) {
+    const row = el("div", "tco-row");
+    row.appendChild(el("span", null, label));
+    const right = el("span", "tco-val", fmtMoney(v, v >= 1000 ? 0 : 2));
+    right.appendChild(el("span", "tco-pct", " · " + Math.round((v / total) * 100) + "%"));
+    row.appendChild(right);
+    box.appendChild(row);
+  }
 }
 
 function renderTiles(fuel) {
@@ -746,22 +938,30 @@ function toCSV() {
   ].join(","));
   return head + "\n" + lines.join("\n") + "\n";
 }
-function csvFileName() {
-  return "fuel-log-" + new Date().toISOString().slice(0, 10) + ".csv";
+function toAdminCSV() {
+  const head = "Date,Category,Cost,Odometer (km),Next due,Notes";
+  const esc = (s) => (/[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
+  const lines = [...admin].sort((a, b) => a.date.localeCompare(b.date)).map((r) =>
+    [r.date, r.category, r.cost.toFixed(2), r.odometer ?? "", r.nextDue || "", esc(r.notes || "")].join(","));
+  return head + "\n" + lines.join("\n") + "\n";
 }
-function exportCSV() {
-  const blob = new Blob([toCSV()], { type: "text/csv" });
+function csvFileName(kind) {
+  return kind + "-log-" + new Date().toISOString().slice(0, 10) + ".csv";
+}
+function downloadCSV(text, name) {
+  const blob = new Blob([text], { type: "text/csv" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = csvFileName();
+  a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   toast("CSV downloaded");
 }
 async function shareCSV() {
-  const file = new File([toCSV()], csvFileName(), { type: "text/csv" });
+  const files = [new File([toCSV()], csvFileName("fuel"), { type: "text/csv" })];
+  if (admin.length) files.push(new File([toAdminCSV()], csvFileName("admin"), { type: "text/csv" }));
   try {
-    await navigator.share({ files: [file], title: "Fuel Log export" });
+    await navigator.share({ files, title: "Fuel Log export" });
   } catch (e) { /* user cancelled the share sheet */ }
 }
 
@@ -794,10 +994,35 @@ function parseDateCell(s) {
   if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
   return null;
 }
+function importAdminCSV(rows) {
+  const head = rows[0].map((h) => h.toLowerCase());
+  const col = (name) => head.findIndex((h) => h.startsWith(name));
+  const iDate = col("date"), iCat = col("category"), iCost = col("cost"),
+    iOdo = col("odometer"), iDue = col("next due"), iNotes = col("notes");
+  if (iDate < 0 || iCat < 0 || iCost < 0) throw new Error("Missing Date / Category / Cost columns");
+  const out = [];
+  for (const r of rows.slice(1)) {
+    const date = parseDateCell(r[iDate] || "");
+    const cost = parseFloat(String(r[iCost] || "").replace(/[$\s]/g, ""));
+    if (!date || !(cost >= 0)) continue;
+    const cat = (r[iCat] || "").trim();
+    out.push({
+      id: uid(), date, cost,
+      category: ADMIN_CATS.includes(cat) ? cat : "Other",
+      odometer: iOdo >= 0 && r[iOdo] !== "" ? Math.round(parseFloat(r[iOdo])) : null,
+      nextDue: iDue >= 0 ? parseDateCell(r[iDue] || "") : null,
+      notes: iNotes >= 0 ? (r[iNotes] || "").trim() || null : null,
+    });
+  }
+  if (!out.length) throw new Error("No valid rows found");
+  return out;
+}
+
 function importCSV(text) {
   const rows = parseCSV(text);
   if (rows.length < 2) throw new Error("No data rows found");
   const head = rows[0].map((h) => h.toLowerCase());
+  if (head.some((h) => h.startsWith("category"))) return { kind: "admin", records: importAdminCSV(rows) };
   const col = (name) => head.findIndex((h) => h.startsWith(name));
   const iDate = col("date"), iStation = col("station"), iOdo = col("odometer"),
     iType = col("petrol type"), iPrice = col("price"), iLitres = col("litres"), iPartial = col("partial");
@@ -820,13 +1045,13 @@ function importCSV(text) {
     });
   }
   if (!out.length) throw new Error("No valid rows found");
-  return out;
+  return { kind: "fuel", records: out };
 }
 
 function renderData() {
   const fuel = entries.filter((e) => !isBaseline(e));
   $("#dataSummary").textContent =
-    `${entries.length} records on this device (${fuel.length} fills).`;
+    `${fuel.length} fuel fills and ${admin.length} admin records on this device.`;
   $("#shareBtn").hidden = !(navigator.share && navigator.canShare &&
     navigator.canShare({ files: [new File(["x"], "x.csv", { type: "text/csv" })] }));
 }
@@ -855,6 +1080,7 @@ function init() {
   document.querySelectorAll(".tabbar button").forEach((b) =>
     b.addEventListener("click", () => {
       if (editingId && b.dataset.tab !== "add") { editingId = null; }
+      if (adminEditingId && b.dataset.tab !== "admin") { adminEditingId = null; }
       switchTab(b.dataset.tab);
     }));
 
@@ -877,32 +1103,56 @@ function init() {
   });
 
   $("#themeBtn").addEventListener("click", cycleTheme);
-  $("#exportBtn").addEventListener("click", exportCSV);
+  $("#exportBtn").addEventListener("click", () => downloadCSV(toCSV(), csvFileName("fuel")));
+  $("#exportAdminBtn").addEventListener("click", () => downloadCSV(toAdminCSV(), csvFileName("admin")));
   $("#shareBtn").addEventListener("click", shareCSV);
+
+  $("#adminForm").addEventListener("submit", onSubmitAdmin);
+  document.querySelectorAll("#aCat button").forEach((b) =>
+    b.addEventListener("click", () => setAdminCat(b.dataset.v)));
+  $("#aCancelBtn").addEventListener("click", () => { adminEditingId = null; renderAdmin(); });
+  $("#aDeleteBtn").addEventListener("click", () => {
+    if (!adminEditingId) return;
+    const r = admin.find((x) => x.id === adminEditingId);
+    if (confirm(`Delete the ${r.category} record from ${fmtNZDate(r.date)}?`)) {
+      admin = admin.filter((x) => x.id !== adminEditingId);
+      save();
+      adminEditingId = null;
+      toast("Record deleted");
+      renderAdmin();
+      updateAdminBadge();
+    }
+  });
   $("#importBtn").addEventListener("click", () => $("#importFile").click());
   $("#importFile").addEventListener("change", async (ev) => {
     const f = ev.target.files[0];
     ev.target.value = "";
     if (!f) return;
     try {
-      const imported = importCSV(await f.text());
-      if (confirm(`Replace the ${entries.length} records on this device with ${imported.length} imported records?`)) {
-        entries = imported;
+      const { kind, records } = importCSV(await f.text());
+      const label = kind === "admin" ? "admin records" : "fuel records";
+      const current = kind === "admin" ? admin.length : entries.length;
+      if (confirm(`This looks like a ${kind} CSV. Replace the ${current} ${label} on this device with ${records.length} imported ones?`)) {
+        if (kind === "admin") admin = records;
+        else entries = records;
         save();
-        toast("Imported " + imported.length + " records");
+        toast(`Imported ${records.length} ${label}`);
         renderData();
+        updateAdminBadge();
       }
     } catch (err) {
       alert("Couldn't import that file: " + err.message);
     }
   });
   $("#wipeBtn").addEventListener("click", () => {
-    if (confirm("Erase ALL fuel data from this device? Consider exporting a CSV first.") &&
+    if (confirm("Erase ALL fuel and admin data from this device? Consider exporting CSVs first.") &&
         confirm("Really erase everything? This cannot be undone.")) {
       entries = [];
+      admin = [];
       save();
       toast("All data erased");
       renderData();
+      updateAdminBadge();
     }
   });
 
@@ -913,6 +1163,7 @@ function init() {
   });
 
   switchTab("add");
+  updateAdminBadge();
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("sw.js").catch(() => {});
